@@ -179,6 +179,10 @@ interface RiseState {
 const RISE_DURATION = 0.85; // seconds
 const RISE_STAGGER_DELAY = 0.003; // stagger between buildings (~2.4s for 800 buildings)
 
+// Module-level flag so the rise animation only plays once per session,
+// surviving component remounts caused by Next.js navigation.
+let hasPlayedRiseGlobal = false;
+
 export default memo(function InstancedBuildings({
   buildings,
   colors,
@@ -288,7 +292,8 @@ export default memo(function InstancedBuildings({
   // Rise animation state
   const risingRef = useRef<RiseState[]>([]);
   const riseInitialized = useRef(false);
-  const hasPlayedRise = useRef(false);
+  // hasPlayedRise uses the module-level flag (hasPlayedRiseGlobal) so the
+  // animation survives component remounts from Next.js navigation.
   const holdRiseRef = useRef(holdRise);
   holdRiseRef.current = holdRise;
 
@@ -333,16 +338,16 @@ export default memo(function InstancedBuildings({
     mesh.geometry.setAttribute("aRise", riseAttr);
     mesh.geometry.setAttribute("aTint", tintAttr);
 
-    if (hasPlayedRise.current) {
-      // Skip rise animation on subsequent updates (city reload, chunk loading)
+    if (hasPlayedRiseGlobal) {
+      // Skip rise animation on return visits / subsequent updates
       // Show all buildings at full height immediately
       for (let i = 0; i < count; i++) riseData[i] = 1;
       riseAttr.needsUpdate = true;
       riseInitialized.current = true;
       risingRef.current = [];
     } else {
-      // First mount: play the staggered rise animation
-      hasPlayedRise.current = true;
+      // First mount this session: play the staggered rise animation
+      hasPlayedRiseGlobal = true;
       riseInitialized.current = false;
       risingRef.current = [];
     }

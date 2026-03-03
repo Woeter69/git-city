@@ -20,7 +20,6 @@ import Image from "next/image";
 import Link from "next/link";
 import ActivityTicker, { type FeedEvent } from "@/components/ActivityTicker";
 import ActivityPanel from "@/components/ActivityPanel";
-import LofiRadio from "@/components/LofiRadio";
 import { ITEM_NAMES, ITEM_EMOJIS } from "@/lib/zones";
 import { useStreakCheckin } from "@/lib/useStreakCheckin";
 import { useLiveUsers } from "@/lib/useLiveUsers";
@@ -536,6 +535,19 @@ function HomeContent() {
   const theme = THEMES[themeIndex];
   const didInit = useRef(false);
   const savedFocusRef = useRef<string | null>(null);
+
+  // Broadcast mode/theme to global LofiRadio (lives in layout)
+  useEffect(() => {
+    const detail = {
+      flyMode,
+      raidMode: raidState.phase !== "idle" && raidState.phase !== "preview",
+      accent: theme.accent,
+      shadow: theme.shadow,
+    };
+    // Store for late-mounting components (e.g. portal)
+    (window as unknown as Record<string, unknown>).__gcRadioMode = detail;
+    window.dispatchEvent(new CustomEvent("gc:radio-mode", { detail }));
+  }, [flyMode, raidState.phase, theme.accent, theme.shadow]);
 
   // Detect mobile/touch device
   useEffect(() => {
@@ -3326,7 +3338,7 @@ if (claimingGift) return;
         </div>
       )}
 
-      {/* ─── Bottom-left controls: Theme + Radio ─── */}
+      {/* ─── Bottom-left controls: Theme + Radio (portal slot) + Intro ─── */}
       {!flyMode && !introMode && !rabbitCinematic && !exploreMode && (
         <div className="pointer-events-auto fixed bottom-10 left-3 z-[25] flex items-center gap-2 sm:left-4">
           <button
@@ -3337,7 +3349,7 @@ if (claimingGift) return;
             <span className="text-cream">{theme.name}</span>
             <span className="text-dim">{themeIndex + 1}/{THEMES.length}</span>
           </button>
-          <LofiRadio accent={theme.accent} shadow={theme.shadow} flyMode={flyMode} raidMode={raidState.phase !== "idle" && raidState.phase !== "preview"} />
+          <div id="gc-radio-slot" />
           <button
             onClick={replayIntro}
             className="btn-press flex items-center gap-1 border-[3px] border-border bg-bg/70 px-2 py-1 text-[10px] backdrop-blur-sm transition-colors hover:border-border-light"
@@ -3346,11 +3358,6 @@ if (claimingGift) return;
             <span style={{ color: theme.accent }}>&#9654;</span>
             <span className="text-cream">Intro</span>
           </button>
-        </div>
-      )}
-      {flyMode && (
-        <div className="pointer-events-auto fixed bottom-4 left-3 z-[25] sm:left-4">
-          <LofiRadio accent={theme.accent} shadow={theme.shadow} flyMode={flyMode} raidMode={raidState.phase !== "idle" && raidState.phase !== "preview"} />
         </div>
       )}
 

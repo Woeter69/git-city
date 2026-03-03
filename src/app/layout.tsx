@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
+import GlobalRadio from "@/components/GlobalRadio";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -95,6 +96,7 @@ export default function RootLayout({
       </head>
       <body className="bg-bg font-pixel text-warm">
         {children}
+        <GlobalRadio />
         <Analytics />
         <SpeedInsights />
         {process.env.NEXT_PUBLIC_HIMETRICA_API_KEY && (
