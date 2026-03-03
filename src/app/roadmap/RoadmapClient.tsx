@@ -1,7 +1,8 @@
 "use client";
 
-import { useOptimistic, useTransition } from "react";
+import { useCallback, useOptimistic, useState, useTransition } from "react";
 import Link from "next/link";
+import { createBrowserSupabase } from "@/lib/supabase";
 import { ROADMAP_PHASES, VOTABLE_ITEM_IDS } from "@/lib/roadmap-data";
 import type { RoadmapPhase, RoadmapItem, ItemStatus } from "@/lib/roadmap-data";
 import { toggleVote } from "./actions";
@@ -62,6 +63,15 @@ export default function RoadmapClient({
   const total = totalItems();
   const done = doneItems();
   const pct = Math.round((done / total) * 100);
+  const [showSignIn, setShowSignIn] = useState(false);
+
+  const handleSignIn = useCallback(async () => {
+    const supabase = createBrowserSupabase();
+    await supabase.auth.signInWithOAuth({
+      provider: "github",
+      options: { redirectTo: `${window.location.origin}/auth/callback` },
+    });
+  }, []);
 
   return (
     <main className="min-h-screen bg-bg font-pixel uppercase text-warm">
@@ -121,24 +131,17 @@ export default function RoadmapClient({
               voteCounts={voteCounts}
               userVotes={userVotes}
               isLoggedIn={isLoggedIn}
+              onSignInPrompt={() => setShowSignIn(true)}
             />
           ))}
         </div>
 
-        {/* Vote CTA */}
-        {!isLoggedIn && (
-          <div className="mt-10 border-[3px] border-border bg-bg-card p-5 text-center">
-            <p className="text-xs text-muted normal-case">
-              Sign in with GitHub to vote on features
-            </p>
-            <Link
-              href="/"
-              className="btn-press pixel-shadow-lime mt-3 inline-block px-6 py-2.5 text-xs text-bg"
-              style={{ backgroundColor: ACCENT }}
-            >
-              Sign In
-            </Link>
-          </div>
+        {/* Sign-in modal */}
+        {showSignIn && (
+          <SignInPrompt
+            onClose={() => setShowSignIn(false)}
+            onSignIn={handleSignIn}
+          />
         )}
 
         {/* Footer */}
@@ -176,12 +179,14 @@ function PhaseBlock({
   voteCounts,
   userVotes,
   isLoggedIn,
+  onSignInPrompt,
 }: {
   phase: RoadmapPhase;
   isLast: boolean;
   voteCounts: Record<string, number>;
   userVotes: string[];
   isLoggedIn: boolean;
+  onSignInPrompt: () => void;
 }) {
   const cfg = STATUS_CONFIG[phase.status];
   const isBuilding = phase.status === "building";
@@ -229,6 +234,7 @@ function PhaseBlock({
               votes={voteCounts[item.id] ?? 0}
               hasVoted={userVotes.includes(item.id)}
               isLoggedIn={isLoggedIn}
+              onSignInPrompt={onSignInPrompt}
             />
           ))}
         </div>
@@ -243,13 +249,14 @@ function ItemRow({
   votes: initialVotes,
   hasVoted: initialHasVoted,
   isLoggedIn,
+  onSignInPrompt,
 }: {
   item: RoadmapItem;
   votes: number;
   hasVoted: boolean;
   isLoggedIn: boolean;
+  onSignInPrompt: () => void;
 }) {
-  const canVote = VOTABLE_ITEM_IDS.has(item.id) && isLoggedIn;
   const [isPending, startTransition] = useTransition();
 
   const [optimistic, setOptimistic] = useOptimistic(
@@ -261,7 +268,10 @@ function ItemRow({
   );
 
   function handleVote() {
-    if (!canVote) return;
+    if (!isLoggedIn) {
+      onSignInPrompt();
+      return;
+    }
     startTransition(async () => {
       setOptimistic("toggle");
       await toggleVote(item.id);
@@ -308,8 +318,8 @@ function ItemRow({
       {showVoteButton && (
         <button
           onClick={handleVote}
-          disabled={isPending || !isLoggedIn}
-          className="flex shrink-0 items-center gap-1.5 border-[2px] px-2 py-1 text-[10px] transition-all disabled:cursor-default"
+          disabled={isPending}
+          className="flex shrink-0 items-center gap-1.5 border-[2px] px-2 py-1 text-[10px] transition-all"
           style={{
             borderColor: optimistic.hasVoted ? ACCENT : "#2a2a30",
             color: optimistic.hasVoted ? ACCENT : MUTED,
@@ -317,19 +327,42 @@ function ItemRow({
               ? "rgba(200, 230, 74, 0.08)"
               : "transparent",
             opacity: isPending ? 0.6 : 1,
+            cursor: isPending ? "wait" : "pointer",
           }}
-          title={
-            !isLoggedIn
-              ? "Sign in to vote"
-              : optimistic.hasVoted
-                ? "Remove vote"
-                : "Vote for this feature"
-          }
         >
           <span style={{ fontSize: "8px" }}>&#9650;</span>
           <span>{optimistic.votes}</span>
         </button>
       )}
+    </div>
+  );
+}
+
+/* ─── Sign In Prompt ─── */
+function SignInPrompt({ onClose, onSignIn }: { onClose: () => void; onSignIn: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-xs border-[3px] border-border bg-bg-raised p-6 text-center">
+        <p className="text-sm text-cream">Sign in to vote</p>
+        <p className="mt-2 text-[10px] text-muted normal-case">
+          Your vote helps us decide what to build next
+        </p>
+        <div className="mt-5 flex gap-2">
+          <button
+            onClick={onClose}
+            className="flex-1 border-[2px] border-border px-3 py-2 text-[10px] text-muted transition-colors hover:border-border-light hover:text-warm"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onSignIn}
+            className="btn-press pixel-shadow-lime flex-1 px-3 py-2 text-[10px] text-bg"
+            style={{ backgroundColor: ACCENT }}
+          >
+            Sign in with GitHub
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
