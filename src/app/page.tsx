@@ -984,55 +984,64 @@ function HomeContent() {
 
   const reloadCity = useCallback(async (bustCache = false) => {
     if (bustCache) clearCityCache();
-    const cacheBust = bustCache ? `&_t=${Date.now()}` : "";
-    const CHUNK = 1000;
-    const res = await fetch(`/api/city?from=0&to=${CHUNK}${cacheBust}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    setStats(data.stats);
-    if (data.developers.length === 0) return null;
+    const cacheBust = bustCache ? `?_t=${Date.now()}` : "";
 
-    // Render downtown immediately
-    const layout = generateCityLayout(data.developers);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let allDevs: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let cityStats: any = null;
+
+    // Try pre-computed snapshot first
+    try {
+      const snapshotUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/city-data/snapshot.json${cacheBust}`;
+      const snapshotRes = await fetch(snapshotUrl);
+      if (snapshotRes.ok) {
+        const snapshot = await snapshotRes.json();
+        allDevs = snapshot.developers;
+        cityStats = snapshot.stats;
+      }
+    } catch { /* fall through to chunked */ }
+
+    // Fallback to chunked API
+    if (allDevs.length === 0) {
+      const cbParam = bustCache ? `&_t=${Date.now()}` : "";
+      const CHUNK = 1000;
+      const res = await fetch(`/api/city?from=0&to=${CHUNK}${cbParam}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      allDevs = data.developers ?? [];
+      cityStats = data.stats;
+
+      const total = cityStats?.total_developers ?? 0;
+      if (total > CHUNK && allDevs.length > 0) {
+        const promises: Promise<{ developers: typeof data.developers } | null>[] = [];
+        for (let from = CHUNK; from < total; from += CHUNK) {
+          promises.push(
+            fetch(`/api/city?from=${from}&to=${from + CHUNK}${cbParam}`)
+              .then(r => r.ok ? r.json() : null)
+          );
+        }
+        const results = await Promise.all(promises);
+        for (const chunk of results) {
+          if (chunk?.developers?.length) {
+            allDevs = [...allDevs, ...chunk.developers];
+          }
+        }
+      }
+    }
+
+    if (allDevs.length === 0) return null;
+
+    setStats(cityStats);
+    const layout = generateCityLayout(allDevs);
     setBuildings(layout.buildings);
     setPlazas(layout.plazas);
     setDecorations(layout.decorations);
     setRiver(layout.river);
     setBridges(layout.bridges);
     setDistrictZones(layout.districtZones);
-
-    const total = data.stats?.total_developers ?? 0;
-    if (total <= CHUNK) {
-      setCityCache({ ...layout, stats: data.stats });
-      return layout.buildings;
-    }
-
-    // Fetch remaining chunks in parallel
-    const promises: Promise<{ developers: typeof data.developers } | null>[] = [];
-    for (let from = CHUNK; from < total; from += CHUNK) {
-      promises.push(
-        fetch(`/api/city?from=${from}&to=${from + CHUNK}${cacheBust}`)
-          .then(r => r.ok ? r.json() : null)
-      );
-    }
-    const results = await Promise.all(promises);
-    let allDevs = [...data.developers];
-    for (const chunk of results) {
-      if (chunk?.developers?.length) {
-        allDevs = [...allDevs, ...chunk.developers];
-      }
-    }
-
-    // Regenerate full layout with all developers
-    const fullLayout = generateCityLayout(allDevs);
-    setBuildings(fullLayout.buildings);
-    setPlazas(fullLayout.plazas);
-    setDecorations(fullLayout.decorations);
-    setRiver(fullLayout.river);
-    setBridges(fullLayout.bridges);
-    setDistrictZones(fullLayout.districtZones);
-    setCityCache({ ...fullLayout, stats: data.stats });
-    return fullLayout.buildings;
+    setCityCache({ ...layout, stats: cityStats });
+    return layout.buildings;
   }, []);
 
   // Handle loading fade complete: transition to "done" and trigger intro
@@ -1086,19 +1095,56 @@ function HomeContent() {
           return;
         }
 
-        // Fetch first chunk
+        // Fetch city data
         setLoadStage("fetching");
         setLoadProgress(10);
 
-        const CHUNK = 1000;
-        const res = await fetch(`/api/city?from=0&to=${CHUNK}`);
-        if (!res.ok) throw new Error("Failed to fetch city data");
-        const data = await res.json();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let allDevs: any[] = [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let cityStats: any = null;
+
+        // Try pre-computed snapshot first (single file from Supabase CDN)
+        try {
+          const snapshotUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/city-data/snapshot.json`;
+          const snapshotRes = await fetch(snapshotUrl);
+          if (snapshotRes.ok) {
+            const snapshot = await snapshotRes.json();
+            allDevs = snapshot.developers;
+            cityStats = snapshot.stats;
+          }
+        } catch { /* fall through to chunked */ }
+
+        // Fallback to chunked API
+        if (allDevs.length === 0) {
+          const CHUNK = 1000;
+          const res = await fetch(`/api/city?from=0&to=${CHUNK}`);
+          if (!res.ok) throw new Error("Failed to fetch city data");
+          const data = await res.json();
+          allDevs = data.developers ?? [];
+          cityStats = data.stats;
+
+          const total = cityStats?.total_developers ?? 0;
+          if (total > CHUNK && allDevs.length > 0) {
+            const promises: Promise<{ developers: typeof data.developers } | null>[] = [];
+            for (let from = CHUNK; from < total; from += CHUNK) {
+              promises.push(
+                fetch(`/api/city?from=${from}&to=${from + CHUNK}`)
+                  .then((r) => (r.ok ? r.json() : null))
+              );
+            }
+            const results = await Promise.all(promises);
+            for (const chunk of results) {
+              if (chunk?.developers?.length) {
+                allDevs = [...allDevs, ...chunk.developers];
+              }
+            }
+          }
+        }
 
         setLoadProgress(30);
 
-        if (data.developers.length === 0) {
-          // Empty city, skip to ready
+        if (!allDevs || allDevs.length === 0) {
           setLoadProgress(100);
           setLoadStage("ready");
           return;
@@ -1109,8 +1155,8 @@ function HomeContent() {
         setLoadProgress(45);
         await new Promise((r) => setTimeout(r, 0)); // yield to browser
 
-        setStats(data.stats);
-        let finalLayout = generateCityLayout(data.developers);
+        setStats(cityStats);
+        const finalLayout = generateCityLayout(allDevs);
         setBuildings(finalLayout.buildings);
         setPlazas(finalLayout.plazas);
         setDecorations(finalLayout.decorations);
@@ -1131,44 +1177,16 @@ function HomeContent() {
             resolved = true;
             resolve();
           };
-          // 2 chained rAFs
           requestAnimationFrame(() => {
             requestAnimationFrame(() => done());
           });
-          // Fallback for hidden tabs where rAF doesn't fire
           setTimeout(done, 500);
         });
 
         setLoadProgress(80);
 
-        // Fetch remaining chunks if needed
-        const total = data.stats?.total_developers ?? 0;
-        if (total > CHUNK) {
-          const promises: Promise<{ developers: typeof data.developers } | null>[] = [];
-          for (let from = CHUNK; from < total; from += CHUNK) {
-            promises.push(
-              fetch(`/api/city?from=${from}&to=${from + CHUNK}`)
-                .then((r) => (r.ok ? r.json() : null))
-            );
-          }
-          const results = await Promise.all(promises);
-          let allDevs = [...data.developers];
-          for (const chunk of results) {
-            if (chunk?.developers?.length) {
-              allDevs = [...allDevs, ...chunk.developers];
-            }
-          }
-          finalLayout = generateCityLayout(allDevs);
-          setBuildings(finalLayout.buildings);
-          setPlazas(finalLayout.plazas);
-          setDecorations(finalLayout.decorations);
-          setRiver(finalLayout.river);
-          setBridges(finalLayout.bridges);
-          setDistrictZones(finalLayout.districtZones);
-        }
-
         // Save to cache for return visits
-        setCityCache({ ...finalLayout, stats: data.stats });
+        setCityCache({ ...finalLayout, stats: cityStats });
         setLoadProgress(95);
 
         // Enforce minimum 800ms display time to avoid flash
