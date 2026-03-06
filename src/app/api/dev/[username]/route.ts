@@ -4,6 +4,13 @@ import { createServerSupabase } from "@/lib/supabase-server";
 import type { TopRepo } from "@/lib/github";
 import { calculateGithubXp } from "@/lib/xp";
 
+// Allow up to 60s on Vercel (Pro plan). Hobby plan max is 10s.
+export const maxDuration = 60;
+
+// Timeout for external API calls (15 seconds)
+const FETCH_TIMEOUT_MS = 15_000;
+
+// ─── Rate Limiting ───────────────────────────────────────────
 async function hashKey(key: string): Promise<string> {
   const data = new TextEncoder().encode(key + (process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""));
   const buf = await crypto.subtle.digest("SHA-256", data);
@@ -159,6 +166,7 @@ async function fetchExpandedGitHubData(login: string): Promise<ExpandedGitHubDat
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ query, variables: { login } }),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
 
     if (!res.ok) return null;
@@ -297,7 +305,7 @@ export async function GET(
 
     const userRes = await fetch(
       `https://api.github.com/users/${encodeURIComponent(username)}`,
-      { headers }
+      { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) },
     );
 
     if (!userRes.ok) {
@@ -334,7 +342,7 @@ export async function GET(
       fetchExpandedGitHubData(ghUser.login),
       fetch(
         `https://api.github.com/users/${encodeURIComponent(username)}/repos?sort=pushed&per_page=100&page=1`,
-        { headers }
+        { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) },
       ),
     ]);
 
@@ -352,17 +360,14 @@ export async function GET(
     let repos: RepoItem[] = reposPage1Res.ok ? await reposPage1Res.json() : [];
 
     if (repos.length >= 100) {
-      const extraPages = await Promise.all(
-        [2, 3, 4, 5].map((page) =>
-          fetch(
-            `https://api.github.com/users/${encodeURIComponent(username)}/repos?sort=pushed&per_page=100&page=${page}`,
-            { headers }
-          ).then((r) => (r.ok ? r.json() as Promise<RepoItem[]> : []))
-        )
+      // Cap at 1 extra page (200 repos total) to avoid timeout
+      const page2Res = await fetch(
+        `https://api.github.com/users/${encodeURIComponent(username)}/repos?sort=pushed&per_page=100&page=2`,
+        { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) },
       );
-      for (const page of extraPages) {
-        if (page.length === 0) break;
-        repos = repos.concat(page);
+      if (page2Res.ok) {
+        const page2: RepoItem[] = await page2Res.json();
+        repos = repos.concat(page2);
       }
     }
 
@@ -509,6 +514,15 @@ export async function GET(
       await sb.rpc("assign_new_dev_rank", { dev_id: devId });
     }
 
+    // Fire-and-forget: recalculate ranks in background (don't block the response)
+    if (isNewDev) {
+      sb.rpc("recalculate_ranks").then(
+        () =>
+          console.log("Ranks recalculated for new dev:", record.github_login),
+        (err: unknown) => console.error("Rank recalculation failed:", err),
+      );
+    }
+
     const { data: withRank } = await sb
       .from("developers")
       .select("*")
@@ -522,9 +536,28 @@ export async function GET(
     });
   } catch (err) {
     console.error("Dev route error:", err);
+
+    // Graceful degradation: return stale cache if GitHub fetch failed
+    if (cached) {
+      return NextResponse.json(
+        { ...cached, _stale: true },
+        {
+          headers: {
+            "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+          },
+        },
+      );
+    }
+
+    const isTimeout =
+      err instanceof DOMException && err.name === "TimeoutError";
     return NextResponse.json(
-      { error: "Failed to fetch GitHub data" },
-      { status: 500 }
+      {
+        error: isTimeout
+          ? "GitHub API timed out. Please try again."
+          : "Failed to fetch GitHub data",
+      },
+      { status: isTimeout ? 504 : 500 },
     );
   }
 }

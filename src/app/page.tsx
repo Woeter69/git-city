@@ -189,6 +189,11 @@ const ERROR_MESSAGES: Record<string, { primary: (u: string) => string; secondary
     primary: () => "GitHub's API is temporarily unavailable",
     secondary: "Too many requests to GitHub. Try again in a few minutes.",
   },
+  "timeout": {
+    primary: (u) => `Fetching "@${u}" took too long`,
+    secondary: "GitHub's API was slow to respond. This usually resolves itself — try again in a moment.",
+    hasRetry: true,
+  },
   "network": {
     primary: () => "Couldn't reach the server",
     secondary: "Check your internet connection and try again.",
@@ -227,7 +232,7 @@ function SearchFeedback({
   useEffect(() => {
     if (feedback?.type !== "error") return;
     const code = feedback.code ?? "generic";
-    if (code === "no-activity" || code === "network" || code === "generic") return;
+    if (code === "no-activity" || code === "network" || code === "generic" || code === "timeout") return;
     const timer = setTimeout(onDismiss, 8000);
     return () => clearTimeout(timer);
   }, [feedback, onDismiss]);
@@ -387,7 +392,7 @@ function HomeContent() {
   const initialLoading = loadStage !== "done";
   const [feedback, setFeedback] = useState<{
     type: "loading" | "error";
-    code?: "not-found" | "org" | "no-activity" | "rate-limit" | "github-rate-limit" | "network" | "generic";
+    code?: "not-found" | "org" | "no-activity" | "rate-limit" | "github-rate-limit" | "timeout" | "network" | "generic";
     username?: string;
     raw?: string;
   } | null>(null);
@@ -1444,8 +1449,9 @@ function HomeContent() {
       const devData = await devRes.json();
 
       if (!devRes.ok) {
-        let code: "not-found" | "org" | "no-activity" | "rate-limit" | "github-rate-limit" | "generic" = "generic";
+        let code: "not-found" | "org" | "no-activity" | "rate-limit" | "github-rate-limit" | "timeout" | "generic" = "generic";
         if (devRes.status === 404) code = "not-found";
+        else if (devRes.status === 504) code = "timeout";
         else if (devRes.status === 429) {
           code = devData.error?.includes("GitHub") ? "github-rate-limit" : "rate-limit";
         } else if (devRes.status === 400) {
