@@ -168,26 +168,18 @@ export async function GET(request: NextRequest) {
 
   const compressed = gzipSync(Buffer.from(snapshot));
 
-  // Upload via REST API with Content-Encoding: gzip so browsers auto-decompress.
-  // The Supabase JS SDK doesn't expose Content-Encoding, so we call the API directly.
-  const uploadRes = await fetch(
-    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${STORAGE_PATH}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-        "Content-Type": "application/json",
-        "Content-Encoding": "gzip",
-        "cache-control": "no-cache",
-        "x-upsert": "true",
-      },
-      body: compressed,
-    },
-  );
+  // Upload gzip bytes directly via Supabase SDK (avoids Content-Encoding issues).
+  // The frontend decompresses with DecompressionStream.
+  const { error: uploadError } = await sb.storage
+    .from(STORAGE_BUCKET)
+    .upload(STORAGE_PATH, compressed, {
+      contentType: "application/gzip",
+      upsert: true,
+      cacheControl: "no-cache",
+    });
 
-  if (!uploadRes.ok) {
-    const err = await uploadRes.text();
-    return NextResponse.json({ error: err }, { status: 500 });
+  if (uploadError) {
+    return NextResponse.json({ error: uploadError.message }, { status: 500 });
   }
 
   return NextResponse.json({
