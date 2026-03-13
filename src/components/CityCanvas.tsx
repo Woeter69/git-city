@@ -21,6 +21,7 @@ import WhiteRabbit from "./WhiteRabbit";
 import CelebrationEffect from "./CelebrationEffect";
 import ComparePath from "./ComparePath";
 import WallpaperParallax from "./WallpaperParallax";
+import ThemeSkyFX from "./ThemeSkyFX";
 
 // ─── Theme Definitions ───────────────────────────────────────
 
@@ -554,7 +555,7 @@ const _idealLook = new THREE.Vector3();
 const _blendedPos = new THREE.Vector3();
 const _yAxis = new THREE.Vector3(0, 1, 0);
 
-function AirplaneFlight({ onExit, onHud, onPause, pauseSignal = 0, hasOverlay = false, startPaused = false, vehicleType = "airplane", posRef }: { onExit: () => void; onHud: (s: number, a: number, x: number, z: number, yaw: number) => void; onPause: (paused: boolean) => void; pauseSignal?: number; hasOverlay?: boolean; startPaused?: boolean; vehicleType?: string; posRef?: React.MutableRefObject<THREE.Vector3> }) {
+function AirplaneFlight({ onExit, onHud, onPause, pauseSignal = 0, hasOverlay = false, startPaused = false, vehicleType = "airplane", posRef, cityRadius = 3500 }: { onExit: () => void; onHud: (s: number, a: number, x: number, z: number, yaw: number) => void; onPause: (paused: boolean) => void; pauseSignal?: number; hasOverlay?: boolean; startPaused?: boolean; vehicleType?: string; posRef?: React.MutableRefObject<THREE.Vector3>; cityRadius?: number }) {
   const { camera } = useThree();
   const ref = useRef<THREE.Group>(null);
   const orbitRef = useRef<any>(null);
@@ -583,6 +584,13 @@ function AirplaneFlight({ onExit, onHud, onPause, pauseSignal = 0, hasOverlay = 
   const transitionLookFrom = useRef(new THREE.Vector3());
   const transitionLookTo = useRef(new THREE.Vector3());
   const wasJustUnpaused = useRef(false);
+
+  // Contrail / speed trail
+  const TRAIL_POINTS = 48;
+  const trailPositions = useRef(new Float32Array(TRAIL_POINTS * 3));
+  const trailColors = useRef(new Float32Array(TRAIL_POINTS * 4));
+  const trailGeomRef = useRef<THREE.BufferGeometry>(null);
+  const trailInit = useRef(false);
 
   const hudTimer = useRef(0);
   const lastHudSpeed = useRef(-1);
@@ -724,6 +732,11 @@ function AirplaneFlight({ onExit, onHud, onPause, pauseSignal = 0, hasOverlay = 
         e.preventDefault();
         if (paused.current) doResume();
         else doPause();
+      } else if (e.code === "KeyR") {
+        if (!paused.current) {
+          // Return to City
+          yaw.current = Math.atan2(pos.current.x, pos.current.z);
+        }
       } else if (paused.current && FLIGHT_KEYS.has(e.code)) {
         // Any flight key while paused → resume flying
         doResume();
@@ -803,6 +816,28 @@ function AirplaneFlight({ onExit, onHud, onPause, pauseSignal = 0, hasOverlay = 
     _fwd.set(-Math.sin(yaw.current), 0, -Math.cos(yaw.current));
     pos.current.addScaledVector(_fwd, actualSpeed * dt);
 
+    // Soft / Hard boundary for X/Z dynamically based on city size
+    const MAX_RADIUS = Math.max(3500, cityRadius * 1.3);
+    const SOFT_RADIUS = MAX_RADIUS * 0.85;
+    const distSq = pos.current.x * pos.current.x + pos.current.z * pos.current.z;
+    if (distSq > SOFT_RADIUS * SOFT_RADIUS) {
+      const dist = Math.sqrt(distSq);
+      if (dist > SOFT_RADIUS) {
+        const excess = dist - SOFT_RADIUS;
+        const pullFactor = Math.min(excess / (MAX_RADIUS - SOFT_RADIUS), 1.0);
+        const pullMag = actualSpeed * dt * pullFactor * 1.5;
+        pos.current.x -= (pos.current.x / dist) * pullMag;
+        pos.current.z -= (pos.current.z / dist) * pullMag;
+
+        const newDistSq = pos.current.x * pos.current.x + pos.current.z * pos.current.z;
+        if (newDistSq > MAX_RADIUS * MAX_RADIUS) {
+          const newDist = Math.sqrt(newDistSq);
+          pos.current.x = (pos.current.x / newDist) * MAX_RADIUS;
+          pos.current.z = (pos.current.z / newDist) * MAX_RADIUS;
+        }
+      }
+    }
+
     if (posRef) posRef.current.copy(pos.current);
 
     const targetBank = -turnInput * MAX_BANK;
@@ -840,6 +875,38 @@ function AirplaneFlight({ onExit, onHud, onPause, pauseSignal = 0, hasOverlay = 
     }
     camera.lookAt(camLook.current);
 
+    // Update trail
+    if (!trailInit.current) {
+      for (let i = 0; i < TRAIL_POINTS; i++) {
+        trailPositions.current[i * 3] = pos.current.x;
+        trailPositions.current[i * 3 + 1] = pos.current.y;
+        trailPositions.current[i * 3 + 2] = pos.current.z;
+        trailColors.current[i * 4] = 1;
+        trailColors.current[i * 4 + 1] = 1;
+        trailColors.current[i * 4 + 2] = 1;
+        trailColors.current[i * 4 + 3] = 0;
+      }
+      trailInit.current = true;
+    } else {
+      trailPositions.current.copyWithin(3, 0, (TRAIL_POINTS - 1) * 3);
+      trailPositions.current[0] = pos.current.x - _fwd.x * 5; // trails slightly behind the nose
+      trailPositions.current[1] = pos.current.y;
+      trailPositions.current[2] = pos.current.z - _fwd.z * 5;
+    }
+
+    const speedRatio = actualSpeed / DEFAULT_FLY_SPEED;
+    for (let i = 0; i < TRAIL_POINTS; i++) {
+      const fade = 1 - (i / TRAIL_POINTS);
+      // Only show trail when boosting (speedRatio > 1) or fast
+      const intensity = Math.max(0, Math.min(1.0, (speedRatio - 0.7) * 1.5));
+      trailColors.current[i * 4 + 3] = fade * intensity * 0.5; // max 50% opacity
+    }
+
+    if (trailGeomRef.current) {
+      trailGeomRef.current.attributes.position.needsUpdate = true;
+      trailGeomRef.current.attributes.color.needsUpdate = true;
+    }
+
     hudTimer.current += dt;
     if (hudTimer.current > 0.25) {
       hudTimer.current = 0;
@@ -851,6 +918,13 @@ function AirplaneFlight({ onExit, onHud, onPause, pauseSignal = 0, hasOverlay = 
 
   return (
     <>
+      <line>
+        <bufferGeometry ref={trailGeomRef}>
+          <bufferAttribute attach="attributes-position" args={[trailPositions.current, 3]} count={TRAIL_POINTS} />
+          <bufferAttribute attach="attributes-color" args={[trailColors.current, 4]} count={TRAIL_POINTS} />
+        </bufferGeometry>
+        <lineBasicMaterial transparent vertexColors depthWrite={false} blending={THREE.AdditiveBlending} linewidth={2} />
+      </line>
       <group ref={ref}>
         <group scale={[4, 4, 4]}>
           <VehicleMesh type={vehicleType} />
@@ -1982,6 +2056,7 @@ export default function CityCanvas({ buildings, plazas, decorations, river, brid
       <hemisphereLight args={[t.hemiSky, t.hemiGround, t.hemiIntensity * 3.5]} key={`hemi-${themeIndex}`} />
 
       <SkyDome key={`sky-${themeIndex}`} stops={t.sky} />
+      <ThemeSkyFX key={`sky-fx-${themeIndex}`} themeIndex={themeIndex as 0 | 1 | 2 | 3} theme={t} />
 
       {introMode && <IntroFlyover onEnd={onIntroEnd ?? (() => { })} />}
 
@@ -2013,7 +2088,7 @@ export default function CityCanvas({ buildings, plazas, decorations, river, brid
 
           {!introMode && flyMode && (
             <>
-              <AirplaneFlight onExit={onExitFly} onHud={onHud ?? (() => { })} onPause={onPause ?? (() => { })} pauseSignal={flyPauseSignal} hasOverlay={flyHasOverlay} startPaused={flyStartPaused} vehicleType={flyVehicle} posRef={flyPosRef} />
+              <AirplaneFlight onExit={onExitFly} onHud={onHud ?? (() => { })} onPause={onPause ?? (() => { })} pauseSignal={flyPauseSignal} hasOverlay={flyHasOverlay} startPaused={flyStartPaused} vehicleType={flyVehicle} posRef={flyPosRef} cityRadius={cityRadius} />
               <SkyCollectibles playerPosRef={flyPosRef} accentColor={accentColor ?? "#6090e0"} onCollect={onCollect ?? (() => { })} cityRadius={cityRadius} />
             </>
           )}

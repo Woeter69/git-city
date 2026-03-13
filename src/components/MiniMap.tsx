@@ -17,17 +17,17 @@ const DISPLAY = 128;
 const PAD = 3;
 
 const DISTRICT_RGB: Record<string, [number, number, number]> = {
-  downtown:   [200, 153, 29],
-  frontend:   [47, 104, 197],
-  backend:    [191, 54, 54],
-  fullstack:  [134, 68, 197],
-  mobile:     [27, 157, 75],
-  data_ai:    [5, 146, 170],
-  devops:     [199, 92, 18],
-  security:   [176, 30, 30],
-  gamedev:    [189, 58, 122],
+  downtown: [200, 153, 29],
+  frontend: [47, 104, 197],
+  backend: [191, 54, 54],
+  fullstack: [134, 68, 197],
+  mobile: [27, 157, 75],
+  data_ai: [5, 146, 170],
+  devops: [199, 92, 18],
+  security: [176, 30, 30],
+  gamedev: [189, 58, 122],
   vibe_coder: [111, 74, 197],
-  creator:    [187, 143, 6],
+  creator: [187, 143, 6],
 };
 
 export default function MiniMap({ buildings, playerX, playerZ, visible, currentDistrict }: MiniMapProps) {
@@ -148,6 +148,42 @@ export default function MiniMap({ buildings, playerX, playerZ, visible, currentD
     }
 
     ctx.putImageData(new ImageData(new Uint8ClampedArray(buf.buffer as ArrayBuffer), RES, RES), 0, 0);
+
+    // Off-map indicator
+    const inBounds = ppx >= 0 && ppx < RES && ppy >= 0 && ppy < RES;
+    if (!inBounds) {
+      const cx = RES / 2;
+      const cy = RES / 2;
+      const margin = 4;
+      const dx = ppx - cx;
+      const dy = ppy - cy;
+      const half = RES / 2 - margin;
+
+      // Prevent division by zero if dx and dy are both 0 (unlikely if out of bounds)
+      const maxAbs = Math.max(Math.abs(dx), Math.abs(dy));
+      if (maxAbs > 0) {
+        const t = half / maxAbs;
+        const ex = cx + dx * t;
+        const ey = cy + dy * t;
+
+        // Arrow pointing BACK to city center (inward)
+        const ang = Math.atan2(cy - ey, cx - ex);
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.moveTo(ex + Math.cos(ang) * 3, ey + Math.sin(ang) * 3); // tip slightly forward
+        ctx.lineTo(ex - Math.cos(ang - 0.6) * 4, ey - Math.sin(ang - 0.6) * 4);
+        ctx.lineTo(ex - Math.cos(ang + 0.6) * 4, ey - Math.sin(ang + 0.6) * 4);
+        ctx.closePath();
+        ctx.fill();
+
+        // Distance readout
+        const dist = Math.hypot(playerXRef.current, playerZRef.current);
+        ctx.font = "8px sans-serif";
+        ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+        ctx.textAlign = "center";
+        ctx.fillText(`${(dist / 1000).toFixed(1)}km`, cx, RES - 4);
+      }
+    }
   }, [bPixels, w2p]); // no longer deps on playerX, playerZ, currentDistrict
 
   // Redraw when visibility or buildings change

@@ -32,6 +32,9 @@ function formatK(n: number): string {
 }
 
 async function getStats() {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    return { devCount: 0, monthlyImpressions: 0, monthlyClicks: 0, ctr: 0 };
+  }
   const supabase = getSupabaseAdmin();
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86_400_000).toISOString();
 
@@ -312,7 +315,7 @@ export default async function AdvertisePage() {
                 },
                 {
                   q: "How many ad slots are available?",
-                  a: "8 plane slots, 4 blimp slots, 10 each for billboard, rooftop, and LED wrap. Limited inventory keeps your ad visible.",
+                  a: "15 plane slots, 8 blimp slots, 10 each for billboard, rooftop, and LED wrap. Limited inventory keeps your ad visible.",
                 },
                 {
                   q: "How do I pay?",
@@ -327,7 +330,7 @@ export default async function AdvertisePage() {
                   a: "You can cancel your subscription anytime. Your ad stays active until the end of the current billing period. Contact samuelrizzondev@gmail.com if you need help.",
                 },
               ].map((item) => (
-                <div key={item.q} className="border-[2px] border-border p-5">
+                <div key={item.q} className="border-2 border-border p-5">
                   <h3 className="text-sm text-cream">{item.q}</h3>
                   <p className="mt-2 text-sm leading-relaxed text-muted normal-case">
                     {item.a}

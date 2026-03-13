@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { gzipSync } from "zlib";
 import { getSupabaseAdmin } from "@/lib/supabase";
+
+export const maxDuration = 300;
 
 const STORAGE_BUCKET = "city-data";
 const STORAGE_PATH = "snapshot.json";
@@ -163,12 +166,16 @@ export async function GET(request: NextRequest) {
     generated_at: new Date().toISOString(),
   });
 
-  // Upload to Supabase Storage (upsert)
+  const compressed = gzipSync(Buffer.from(snapshot));
+
+  // Upload gzip bytes directly via Supabase SDK (avoids Content-Encoding issues).
+  // The frontend decompresses with DecompressionStream.
   const { error: uploadError } = await sb.storage
     .from(STORAGE_BUCKET)
-    .upload(STORAGE_PATH, snapshot, {
-      contentType: "application/json",
+    .upload(STORAGE_PATH, compressed, {
+      contentType: "application/gzip",
       upsert: true,
+      cacheControl: "no-cache",
     });
 
   if (uploadError) {
@@ -178,7 +185,8 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     ok: true,
     developers: developers.length,
-    size_kb: Math.round(snapshot.length / 1024),
+    size_kb: Math.round(compressed.length / 1024),
+    uncompressed_kb: Math.round(snapshot.length / 1024),
     duration_ms: Date.now() - started,
   });
 }
